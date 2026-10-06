@@ -25,8 +25,12 @@ import random
 test = False
 blood_text = True
 sleep_speed = 0.75
-line_width = os.get_terminal_size()[0]
-line_height = os.get_terminal_size()[1]
+try:
+  line_width = os.get_terminal_size()[0]
+  line_height = os.get_terminal_size()[1]
+except OSError:
+  line_width = 125
+  line_height = 40
 
 ############################## READYING TERMINAL ###############################
 
@@ -101,16 +105,36 @@ def print_title_screen(title_screen):
   print("-"*line_width)
   print('\33[31m' + '█'*line_width + '\33[0m')
   print("-"*line_width)
-  input(" "*round((line_width - 27)/2) + "Press enter to continue...")
+  safe_input(" "*round((line_width - 27)/2) + "Press enter to continue...")
   os.system('cls' if os.name == 'nt' else 'clear')
-
-if test == False:
-  print_title_screen(title_screen)
-else:
-  pass
 
 title_screen = title_logo + one_hundred_complete
 title_screen = title_screen.split("\n")
+
+# input wrapper: any abnormal input (EOF, Ctrl+C) returns to a legal
+# game state instead of crashing the program
+eof_streak = 0
+
+def safe_input(prompt=''):
+
+  global eof_streak
+  global infinity
+
+  try:
+    choice = input(prompt)
+    eof_streak = 0
+    return choice
+  except EOFError:
+    print(' ')
+    eof_streak += 1
+    if eof_streak > 5:
+      print(">> Input stream closed, ending the game safely.")
+      infinity = False
+    return ''
+  except KeyboardInterrupt:
+    print(' ')
+    infinity = False
+    return ''
 
 ############################## FANCY TEXT ######################################
 
@@ -643,7 +667,7 @@ Type in one of the following responses to change a game option:
     'nothing' --   Change nothing and continue.
 """)
     print("-"*line_width)
-    speed_choice = input("Your choice: ")
+    speed_choice = safe_input("Your choice: ")
 
     if speed_choice == '-1' or speed_choice == '-':
         sleep_speed = 1.5
@@ -728,7 +752,7 @@ def game_over():
   print(" ")
   print('-'*line_width)
   time.sleep(sleep_speed)
-  player_choice = input('Your choice: ')
+  player_choice = safe_input('Your choice: ')
   print('-'*line_width)
   time.sleep(sleep_speed)
 
@@ -800,6 +824,27 @@ def new_game(): #new game startup function
   toughness = random.choice(range(1,11)) + game_overs
   hp = random.choice(range(10,21)) + game_overs
   dodge = random.choice(range(1,11)) + game_overs
+
+  # resetting all room state carried over from any previous run,
+  # so a restarted run never inherits a stale room
+  global exits
+  global fight_table
+  global treasures
+  global room_enemies
+  global current_enemy
+  global treasure
+  global fighting_all
+  global player_choice
+  global room_danger
+  exits = []
+  fight_table = []
+  treasures = []
+  room_enemies = []
+  current_enemy = {}
+  treasure = 0
+  fighting_all = False
+  player_choice = 1
+  room_danger = random.choice(range(1,35))
 
   # allowing some testing features here
   if test == False:
@@ -905,7 +950,12 @@ def new_room():
   # assigning the exit's room danger to the new room before erasing that table and setting up lower room danger for new games
   if room_no > 0:
     xp += 1
-    room_danger = exits[int(player_choice) - 1]['danger %']
+    try:
+      room_danger = exits[int(player_choice) - 1]['danger %']
+      if int(player_choice) < 1:
+        raise IndexError
+    except (IndexError, TypeError, ValueError):
+      room_danger = random.choice(range(1,35))
     if room_no %3 == 0:
         hp += 1
         power += 1
@@ -970,7 +1020,7 @@ def new_room():
       row['xp'] = abs(round(weight + random.choice(range(-5, 5)))) + 1
       row['power'] = abs(round(weight + random.choice(range(-5, 5)))) + 1
       row['toughness'] = abs(round(weight + random.choice(range(-5, 5)))) + 1
-      row['hp'] = row['toughness'] = abs(round(weight + random.choice(range(-10, 5)))) + 1
+      row['hp'] = abs(round(weight + random.choice(range(-10, 5)))) + 1
       fight_table.append(row)
 
   # rolling exits
@@ -1074,7 +1124,7 @@ def room_choice(): #player choice response
   else:
     pass
 
-  player_choice = input("""
+  player_choice = safe_input("""
 You have the following choices for your nameless champion. Type a response:
 
    'stay'        --   They stay to fight their first enemy, or take game actions and search if the room is empty.
@@ -1103,7 +1153,7 @@ Your choice: """)
       fighting_all = True
 
   elif player_choice.isdigit() == True:
-    if int(player_choice) > len(exits):
+    if int(player_choice) < 1 or int(player_choice) > len(exits):
       print_fancy(">> Error with response entered, please try again.")
       print("-"*line_width)
     else:
@@ -1138,6 +1188,14 @@ def door_check():
   global fight_table
   global exit_a
   global exit_b
+
+  # validating the chosen door before anything else, so an invalid or
+  # repeated door choice can never leave the current room
+  if str(player_choice).isdigit() == False or int(player_choice) < 1 or int(player_choice) > len(exits):
+    print_fancy(">> Error with exit chosen, please try again.")
+    print("-"*line_width)
+    game_state = 'room_choice'
+    return
 
   if len(fight_table) == 0:
     print_lore("Your nameless champion moves through exit# " + str(player_choice) + random.choice(exit_a))
@@ -1265,6 +1323,11 @@ def initiative_rolls(enemy_xp):
     print_fancy("NAMELESS CHAMPION WINS INITIATIVE!")
     print("-"*line_width)
     attacker = 'player'
+
+  elif player_init == enemy_init:
+    print_fancy(">> INITIATIVE ROLL: TIE! Rolling again...")
+    print("-"*line_width)
+    initiative_rolls(enemy_xp)
 
   else:
     attacker = 'the enemy'
@@ -1549,7 +1612,7 @@ def inventory_use():
   global treasure_checked
   global treasure_tooltip
 
-  while player_choice != 'nothing':
+  while player_choice != 'nothing' and infinity == True:
     print_fancy(text_make_a_choice)
     print('-'*line_width)
     print_fancy('-WHAT COMES NEXT?-')
@@ -1563,7 +1626,7 @@ def inventory_use():
     else:
       pass
 
-    player_choice = input("""
+    player_choice = safe_input("""
 Type a response:
 
    'potion'   --   Use one of the one-time use items from your nameless champion's potions bag.
@@ -1602,21 +1665,22 @@ Your choice: """)
         print("-"*line_width)
         print("Type the name of the potion you'd like to use...")
         print('-'*line_width)
-        potion_to_use = input('Your choice: ')
+        potion_to_use = safe_input('Your choice: ')
         print("-"*line_width)
         # selecting the potion from our potions bag
         the_potion = list(filter(lambda potions_bag: potions_bag['name'] == potion_to_use, potions_bag))
-        try:
+        if len(the_potion) == 0:
+          print_fancy(">> Error with potion name, please try again.")
+          print("-"*line_width)
+        else:
           print("Using:", potion_to_use)
           print(the_potion[0])
           power += the_potion[0]['power']
           toughness += the_potion[0]['toughness']
           xp += the_potion[0]['xp']
           hp += the_potion[0]['hp']
+          # using a potion always consumes exactly one from the bag
           potions_bag.remove(the_potion[0])
-          print("-"*line_width)
-        except:
-          print_fancy(">> Error with potion name, please try again.")
           print("-"*line_width)
 
     elif player_choice == 'add' or player_choice == 'a':
@@ -1645,25 +1709,22 @@ Your choice: """)
             print("-"*line_width)
             print("Type the name of the item you'd like to equip...")
             print('-'*line_width)
-            equipment_to_change = input('Your choice: ')
+            equipment_to_change = safe_input('Your choice: ')
             print("-"*line_width)
             the_equipment = list(filter(lambda inventory: inventory['name'] == equipment_to_change, inventory))
-            try:
+            if len(the_equipment) == 0:
+              print_fancy(">> Error with item name, please try again.")
+              print("-"*line_width)
+            else:
               print("Equipping:", equipment_to_change)
               print(the_equipment[0])
               power += the_equipment[0]['power']
               toughness += the_equipment[0]['toughness']
-              xp += the_equipment[0]['xp']
-              hp += the_equipment[0]['hp']
-              print("-"*line_width)
-            except:
-
-              print("-"*line_width)
-            try:
+              xp += the_equipment[0].get('xp', 0)
+              hp += the_equipment[0].get('hp', 0)
               equipped.append(the_equipment[0])
               inventory.remove(the_equipment[0])
-            except:
-              pass
+              print("-"*line_width)
 
     elif player_choice == 'remove' or player_choice == 'r':
       if len(equipped) < 1:
@@ -1686,25 +1747,22 @@ Your choice: """)
         print("-"*line_width)
         print("Type the name of the item you'd like to unequip...")
         print('-'*line_width)
-        equipment_to_change = input('Your choice: ')
+        equipment_to_change = safe_input('Your choice: ')
         print("-"*line_width)
         the_equipment = list(filter(lambda equipped: equipped['name'] == equipment_to_change, equipped))
-        try:
+        if len(the_equipment) == 0:
+          print_fancy(">> Error please try again!")
+          print("-"*line_width)
+        else:
           print("Removing:", equipment_to_change)
           print(the_equipment[0])
           power -= the_equipment[0]['power']
           toughness -= the_equipment[0]['toughness']
-          xp -= the_equipment[0]['xp']
-          hp -= the_equipment[0]['hp']
-          print("-"*line_width)
-        except:
-          print_fancy(">> Error please try again!")
-          print("-"*line_width)
-        try:
+          xp -= the_equipment[0].get('xp', 0)
+          hp -= the_equipment[0].get('hp', 0)
           equipped.remove(the_equipment[0])
           inventory.append(the_equipment[0])
-        except:
-          pass
+          print("-"*line_width)
     else:
       pass
 
@@ -1817,6 +1875,12 @@ def treasure_check():
   else:
     pass
 
+  # the search is consumed either way: mark this room as searched and
+  # clear its treasure table so nothing here can ever be claimed twice
+  treasure_checked = True
+  treasure = 0
+  treasures = []
+
   # now moving onto inventory use, if there is an item in it
   if len(inventory) + len(potions_bag) < 1:
     pass
@@ -1832,46 +1896,63 @@ def treasure_check():
   else:
     game_state = 'room_choice'
 
-  treasure_checked = True
-
 ############################## MAIN GAME LOOP ##################################
 
-while infinity == True:
+def main():
 
-  # resetting the line_width param each new game state
-  line_width = os.get_terminal_size()[0]
+  global infinity
+  global line_width
+  global game_state
+  global lore_no
 
-  # checking all valid game states
-  if game_state == 'new_game':
-    new_game()
-
-  elif game_state == 'new_room':
-    new_room()
-
-  elif game_state == 'room_choice':
-    room_choice()
-
-  elif game_state == 'door_check':
-    door_check()
-
-  elif game_state == 'in_battle':
-    in_battle()
-
-  elif game_state == 'treasure_check':
-    treasure_check()
-
-  elif game_state == 'game_over':
-    game_over()
-
-  else:
-
-    print(">> " + '\33[31m' + "ERROR:       " + '\033[0;33m' + "GAME STATE FAILURE - PROGRAM ENDED." + '\33[0m')
-    print(">> " + '\33[31m' + "GAME STATE:  " + '\033[0;33m' + str(game_state) + '\33[0m')
-    beep(3)
-    infinity = False
-
-  # lore checks
-  if game_overs >= 5:
-    lore_no += 1
+  if test == False:
+    print_title_screen((title_logo + one_hundred_title).split("\n"))
   else:
     pass
+
+  while infinity == True:
+
+    # resetting the line_width param each new game state
+    try:
+      line_width = os.get_terminal_size()[0]
+    except OSError:
+      line_width = 125
+
+    # checking all valid game states
+    if game_state == 'new_game':
+      new_game()
+
+    elif game_state == 'new_room':
+      new_room()
+
+    elif game_state == 'room_choice':
+      room_choice()
+
+    elif game_state == 'door_check':
+      door_check()
+
+    elif game_state == 'in_battle':
+      in_battle()
+
+    elif game_state == 'treasure_check':
+      treasure_check()
+
+    elif game_state == 'game_over':
+      game_over()
+
+    else:
+
+      print(">> " + '\33[31m' + "ERROR:       " + '\033[0;33m' + "GAME STATE FAILURE - PROGRAM ENDED." + '\33[0m')
+      print(">> " + '\33[31m' + "GAME STATE:  " + '\033[0;33m' + str(game_state) + '\33[0m')
+      beep(3)
+      infinity = False
+
+    # lore checks
+    if game_overs >= 5:
+      lore_no += 1
+    else:
+      pass
+
+
+if __name__ == '__main__':
+  main()
